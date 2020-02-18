@@ -1,5 +1,5 @@
 
-obj-m += rootkit.o
+obj-m += b4rnd00r.o
 
 all:
 	$(MAKE) -C /lib/modules/$(shell uname -r)/build M=$(PWD) modules

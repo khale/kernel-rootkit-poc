@@ -1,0 +1,11 @@
+language: c
+
+dist: xenial
+
+addons:
+  apt:
+    update: true
+    packages:
+      - linux-headers-`uname -r`
+
+script: make
